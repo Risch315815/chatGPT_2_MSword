@@ -1,0 +1,297 @@
+import os
+import re
+import requests
+from bs4 import BeautifulSoup
+import markdownify
+from docx import Document
+from docx.shared import Pt
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+from opencc import OpenCC
+
+#----------------------------------------------------------------------------------
+
+# Usage
+project_name = [YOUR PROJECT NAME] # Be sure to make it a string
+source_dir = f"[PATH TO THE DIRECTORY YOU PUT YOUR HTML FILE IN]\\{project_name}" # Please keep the "\\{project_name}" part
+html_url = [HTML FILE OF THE CHATGPT CONVERSATION PAGE] # Be sure to make it a string
+html_file = f"{source_dir}.html"
+clean_html_file = f"{source_dir}_clean.html"
+markdown_file = f"{source_dir}.md"
+word_file = f"{source_dir}.docx"
+token = [WHATEVER GIBBERISH YOU LIKE] # Be sure to make it a string
+
+#----------------------------------------------------------------------------------
+
+class HTML_2_MSWord_OP:
+    
+    def __init__(self, source_dir):
+        self.source_dir = source_dir
+    
+    def ensure_directory_exists(self):
+        if not os.path.exists(self.source_dir):
+            os.makedirs(self.source_dir)
+
+    #----------------------------------------------------------------------------------
+
+    def download_html(self, url, html_filename):
+        response = requests.get(url)
+        if response.status_code == 200:
+            with open(html_filename, 'w', encoding='utf-8') as file:
+                file.write(response.text)
+            print(f"Webpage downloaded and saved as {html_filename}")
+        else:
+            print(f"Failed to download webpage. Status code: {response.status_code}")
+    
+    #----------------------------------------------------------------------------------
+
+    def clean_html_and_convert_to_markdown(self, input_html_file, output_md_file):
+        # Open and parse the HTML file
+        with open(input_html_file, 'r', encoding='utf-8') as file:
+            soup = BeautifulSoup(file, 'html.parser')
+
+        # Remove unnecessary elements like scripts, styles, and metadata
+        for tag in soup(["script", "style", "meta", "link", "noscript"]):
+            tag.extract()
+
+        # Keep tags that are related to the content we care about
+        main_content = soup.find_all(['div', 'span', 'p', 'h1', 'h2', 'h3', 'ul', 'li'])
+
+        # Convert the extracted content to markdown
+        markdown_content = ""
+        for tag in main_content:
+            markdown_content += markdownify.markdownify(str(tag), heading_style="ATX")
+
+        # Save the cleaned content to a markdown file
+        with open(output_md_file, 'w', encoding='utf-8') as output_file:
+            output_file.write(markdown_content)
+
+        print(f"Markdown file created at: {output_md_file}")
+
+    #----------------------------------------------------------------------------------
+
+    def remove_conversation_history(self, markdown_file):
+        try:
+            # Open and read the markdown file
+            with open(markdown_file, 'r', encoding='utf-8') as file:
+                content = file.readlines()
+
+            # Initialize an empty list to store lines after "##### You said:"
+            new_content = []
+            skip_section = True  # Initially set to True to skip content before the conversation
+
+            # Define a pattern to detect the start of the real conversation ("##### You said:")
+            conversation_start_pattern = re.compile(r'##### You said:')
+
+            for line in content:
+                # Once we find the start of the conversation, stop skipping lines
+                if re.search(conversation_start_pattern, line):
+                    skip_section = False
+
+                # Append lines only after the conversation has started
+                if not skip_section:
+                    new_content.append(line)
+
+            # Save the modified content back to the markdown file
+            with open(markdown_file, 'w', encoding='utf-8') as file:
+                file.writelines(new_content)
+
+            print(f"Conversation history removed from {markdown_file} up until '##### You said:'")
+
+        except Exception as e:
+            print(f"An error occurred while removing conversation history: {e}")
+    
+    #----------------------------------------------------------------------------------
+    def convert_markdown_to_word(self, markdown_filename, word_filename):
+        try:
+            # Read the markdown file
+            with open(markdown_filename, 'r', encoding='utf-8') as file:
+                markdown_content = file.read()
+
+            # Convert Simplified Chinese to Traditional Chinese
+            cc = OpenCC('s2t')
+            traditional_content = cc.convert(markdown_content)
+
+            # Split content into lines
+            markdown_lines = traditional_content.split('\n')
+
+            # Create a Word document
+            document = Document()
+
+            # Define a variable to hold the current paragraph content
+            current_paragraph = []
+            is_list_item = False
+
+            # Iterate over each line in the markdown
+            for line in markdown_lines:
+                # Check if the line starts with a numbered list (e.g., "1. **")
+                list_item_match = re.match(r'^\d+\.\s\*\*(.*?)\*\*', line)
+
+                if list_item_match:
+                    # If there's an existing paragraph, add it as a Word paragraph before moving to the next item
+                    if current_paragraph:
+                        paragraph = document.add_paragraph(' '.join(current_paragraph))
+                        current_paragraph = []  # Clear the current paragraph
+
+                    # Start a new numbered list item in Word, but strip the markdown's original numbering
+                    paragraph = document.add_paragraph(style='List Number')  # Apply Word's numbered list style
+                    title_text = list_item_match.group(1)  # Extract the title without the original numbering
+                    run = paragraph.add_run(title_text)
+                    run.bold = True  # Make the title bold
+
+                    # Now treat the rest of the content as part of the same paragraph
+                    current_paragraph = []  # Reset paragraph for the next sentence
+                    is_list_item = True
+                else:
+                    # If it's not a numbered list, just add it to the current paragraph (without adding a new line)
+                    current_paragraph.append(line.strip())
+
+            # Add the final paragraph after looping
+            if current_paragraph:
+                paragraph = document.add_paragraph(' '.join(current_paragraph))
+
+
+            # Save as Word file
+            document.save(word_filename)
+            print(f"Word document saved as {word_filename}")
+
+        except Exception as e:
+            print(f"An error occurred during Word conversion: {e}")
+
+    #----------------------------------------------------------------------------------
+
+    def desig_MSWord_format(self, doc_file, output_file):
+        # Open the Word document
+        doc = Document(doc_file)
+        
+        paragraphs_to_add = []
+
+        # Iterate over each paragraph in the document
+        for para in doc.paragraphs:
+            chatGPT_parts = []
+            if "##### You said:" in para.text:
+                print(para)
+                # Split the paragraph into two parts
+                for run in para.runs:
+                    if "##### You said:" in run.text:
+                        run.text = run.text.replace("##### You said:  ", "\n##### You said:USER: ")
+                        reset_numbering = True  # Set the flag to reset numbering after USER
+                    if "###### ChatGPT said:  ChatGPT" in run.text:
+                        run.text = run.text.replace("###### ChatGPT said:  ChatGPT", "\n###### ChatGPT said:ChatGPT: ")
+
+                print(para.text)
+
+                user_parts = para.text.split("##### You said:")
+                for i in user_parts:
+                    if i.strip():
+                        temp = i.split("###### ChatGPT said:")
+                        for j in temp:
+                            if j.strip():
+                                chatGPT_parts.append(j.strip())
+                print(chatGPT_parts)
+
+                # Add the part before "##### You said:" as a new paragraph
+                if chatGPT_parts[0].strip():
+                    paragraphs_to_add.append({"action": "add", "text": user_parts[0].strip(), "position": para, "add_break": False})
+
+                # Add the part after "##### You said:" as another new paragraph, replacing "##### You said:" with "Q: "
+                if len(chatGPT_parts) > 1:
+                    for i in range(1, len(chatGPT_parts)):
+                        if chatGPT_parts[i].strip():
+                            if "USER:" in chatGPT_parts[i].strip():
+                                paragraphs_to_add.append({"action": "add", "text": "", "position": para, "add_break": True})
+                                paragraphs_to_add.append({"action": "add", "text": chatGPT_parts[i].strip(), "position": para, "add_break": False})
+                            else:
+                                paragraphs_to_add.append({"action": "add", "text": chatGPT_parts[i].strip(), "position": para, "add_break": False})
+
+                # Schedule the original paragraph for deletion
+                paragraphs_to_add.append({"action": "delete", "position": para})
+                print("\n")
+                for i in paragraphs_to_add:
+                    print(i, "\n")
+
+        # Modify the document after the loop
+        for item in paragraphs_to_add:
+            if item["action"] == "add":
+                # Insert a new paragraph with a page break and separator if needed
+                new_paragraph = item["position"].insert_paragraph_before(item["text"])
+
+                # Set font to '微軟正黑體' and size to 12 for added paragraphs (only for actual text, not separators)
+                if item["text"].strip():  # Apply formatting only to non-empty text
+                    run = new_paragraph.runs[0] if new_paragraph.runs else new_paragraph.add_run()
+                    run.font.name = 'Microsoft JhengHei'
+                    run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Microsoft JhengHei')
+                    run.font.size = Pt(12)
+
+                if item["add_break"]:  # Add a horizontal line (separator) as a paragraph border
+                    # Add a horizontal line (separator) as a paragraph border
+                    p = new_paragraph._element
+                    pPr = OxmlElement('w:pPr')  # Create paragraph properties element
+                    pBdr = OxmlElement('w:pBdr')  # Create border element
+
+                    bottom = OxmlElement('w:bottom')  # Create a bottom border element
+                    bottom.set(qn('w:val'), 'single')  # Single line border
+                    bottom.set(qn('w:sz'), '4')  # Size of the border
+                    bottom.set(qn('w:space'), '1')  # Space before the border
+                    bottom.set(qn('w:color'), '000000')  # Black color
+
+                    pBdr.append(bottom)  # Append the bottom border to pBdr
+                    pPr.append(pBdr)  # Append pBdr to paragraph properties
+                    p.append(pPr)  # Append paragraph properties to the paragraph
+
+
+            elif item["action"] == "delete":
+                # Remove the original paragraph
+                p = item["position"]._element
+                p.getparent().remove(p)
+                p._p = p._element = None
+
+        # Save the modified document
+        doc.save(output_file)
+        print(f"Formatted and modified document saved as {output_file}")
+
+    #----------------------------------------------------------------------------------
+
+    def delete_content_after_token(self, doc_file, output_file, token):
+        # Open the Word document
+        doc = Document(doc_file)
+
+        token_found = False  # Flag to track if the token has been found
+
+        for para in doc.paragraphs:
+            if token in para.text:
+                # Truncate the text at the token and stop processing further content
+                token_index = para.text.find(token)
+                para.text = para.text[:token_index + len(token)]
+                token_found = True
+            elif token_found:
+                # Clear any paragraphs after the token is found
+                p = para._element
+                p.getparent().remove(p)
+                p._p = p._element = None  # Ensure the paragraph is fully removed
+
+        doc.save(output_file)
+        print(f"Content after the token has been deleted and saved to {output_file}")
+
+#----------------------------------------------------------------------------------
+
+processor = HTML_2_MSWord_OP(source_dir)
+
+# Ensure the source directory exists
+processor.ensure_directory_exists()
+
+# Download and clean HTML, convert to markdown
+processor.download_html(html_url, html_file)
+processor.clean_html_and_convert_to_markdown(source_dir + ".html", source_dir + ".md")
+
+# Remove conversation history from markdown before converting to Word
+processor.remove_conversation_history(source_dir + ".md")
+
+# Convert markdown to Word
+processor.convert_markdown_to_word(source_dir + ".md", source_dir + ".docx")
+
+# Change text format in the Word document
+processor.desig_MSWord_format(source_dir + ".docx", source_dir + "_formatted.docx")
+
+# Delete content after token
+processor.delete_content_after_token(source_dir + "_formatted.docx", source_dir + "_short.docx", token)
