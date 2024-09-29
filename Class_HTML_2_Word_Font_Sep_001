@@ -1,3 +1,11 @@
+# Capturing HTML file of chatGPT chat history
+# Convert HTML file to Markdown file
+# Convert Markdown file to MSword file
+# Format MSword file: font type, font size, adding separator
+# Next version: restart MSword numbering list everytime "USER:" is met
+
+#----------------------------------------------------------------------------------
+
 import os
 import re
 import requests
